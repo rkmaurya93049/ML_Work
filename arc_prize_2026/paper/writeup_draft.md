@@ -1,42 +1,98 @@
-# Evidence-Driven Symbolic Program Synthesis for ARC-AGI-2
+# Evidence-Verified Hybrid Program Synthesis for ARC-AGI-2
 
-> Paper Track draft. Keep the final Kaggle Writeup under 1,500 words and replace every bracketed placeholder with measured results before submission.
+> Paper Track draft. Keep the final Kaggle Writeup within the competition limit and replace every bracketed placeholder only with measured results from the submitted notebook.
 
 ## Subtitle
-A compact, interpretable search system that infers task-specific grid programs from demonstrations and produces two diverse ARC predictions.
+Object-centric abstractions, compositional DSL search, learned program priors, and safe neural-symbolic proposals under deterministic demonstration verification.
 
 ## Abstract
-We study ARC-AGI-2 as test-time program induction rather than conventional supervised prediction. Our system constructs a task-local hypothesis set from geometric, object, scaling, and color transformations, rejects hypotheses that fail any demonstration pair, ranks surviving programs by description complexity, and executes the two highest-value diverse programs on each test grid. The design separates proposal, verification, ranking, and execution, making failures inspectable and allowing learned proposal models to be added without changing the correctness filter. On the ARC-AGI-2 leaderboard the submitted system achieves [LEADERBOARD_SCORE] with submission ID [SUBMISSION_ID].
+We study ARC-AGI-2 as test-time program induction. Instead of mapping grids directly to outputs with a single opaque predictor, our system separates proposal, execution, verification, and ranking. A compact domain-specific language contains geometric, color, object-centric, counting, and symmetry operations. The solver generates task-derived transformations and bounded two-step compositions, executes them on every demonstration, deduplicates behaviorally equivalent programs, and ranks hypotheses by exact demonstration consistency, partial agreement, learned program priors, and description complexity. ARC's two-attempt interface is used for genuine hypothesis diversity. We additionally define a safe neural-symbolic bridge in which an LLM or learned proposer may emit only approved DSL operation names; arbitrary code execution is forbidden and every proposed program must reproduce all demonstrations before it can influence a test prediction. On the submitted ARC-AGI-2 notebook this system achieves [LEADERBOARD_SCORE], submission ID [SUBMISSION_ID].
 
-## 1. Motivation and Theory
-ARC tasks provide a few demonstrations of a latent rule and then require exact prediction on novel inputs. We model each task as selection of a latent program p from a hypothesis space H such that p(x_i)=y_i for every demonstration. This enforces demonstration consistency before any test prediction is allowed.
+## 1. Motivation
+ARC tasks provide a small number of input-output demonstrations and require exact generalization to new inputs. We model a task as latent program induction. Given demonstrations D={(x_i,y_i)}, the objective is to identify a compact program p from a hypothesis space H such that p(x_i)=y_i for all observed pairs and then apply p to the unseen test input.
 
-The central hypothesis is that useful generalization comes from separating two questions: which transformations are plausible, and which are supported by evidence. Proposal can be heuristic or learned; verification is deterministic.
+The design hypothesis is that ARC generalization benefits from separating two roles:
 
-## 2. Method
-The baseline enumerates interpretable grid primitives: identity, 90/180/270-degree rotation, horizontal/vertical reflection, transpose, background-aware object crop, nearest-neighbor enlargement, tiling, and inferred color substitution. Task-derived candidates are generated from dimensional relationships and color correspondences visible in the demonstrations.
+1. **Proposal:** generate plausible abstractions and programs.
+2. **Verification:** reject programs that contradict observed evidence.
 
-Every candidate is executed on all training examples. Candidates with even one mismatch are discarded. Surviving candidates are ranked by a simple complexity prior favoring shorter programs. Two different candidates are retained when possible so Kaggle's two-attempt interface represents genuine hypothesis diversity rather than duplicated guesses.
+This separation allows heuristics, learned priors, retrieval systems, or language models to improve search without being trusted blindly.
 
-## 3. Reproducibility
-The repository contains data loaders, submission validation, symbolic primitives, program synthesis, local evaluation, a Kaggle-ready entry point, and scripts that produce the required `submission.json`. No leaderboard result is hard-coded into the code.
+## 2. Representation
+A grid is represented as a rectangular matrix of color IDs. The solver also constructs object-centric representations from connected components. Each object stores its color, cells, size, and bounding box. This supports operations that refer to the largest or smallest object, isolate one component, fill its bounding box, count components, and form structural signatures.
 
-## 4. Results
-ARC-AGI-2 public leaderboard score: **[LEADERBOARD_SCORE]**  
+The initial DSL includes identity, rotations, reflections, transpose variants, background-aware crop, scaling, tiling, color substitution, object selection, foreground filtering, symmetry completion, outlining, count rendering, and simple object ordering.
+
+## 3. Task-Derived Programs
+Some ARC transformations contain parameters that cannot be fixed globally. The system infers parameters from demonstrations, including color maps, foreground recolor targets, scaling factors, tile factors, and count-rendering orientation/color. A derived program is retained only when it can be executed safely and its behavior is evaluated against every demonstration.
+
+## 4. Compositional Search
+Single primitives are insufficient for tasks such as "extract an object and then reflect it." We therefore perform bounded two-step composition. Candidate programs are behaviorally deduplicated on the demonstrations to reduce equivalent search paths.
+
+For candidate p, each demonstration contributes an exact or partial agreement score. Exact consistency receives highest priority. Partial agreement is used only when no program completely explains the demonstrations and provides a more informative fallback than unconditional identity.
+
+The ranking order is:
+
+1. exact consistency across demonstrations;
+2. mean demonstration agreement;
+3. optional learned symbolic prior;
+4. lower program complexity;
+5. deterministic tie-breaking.
+
+This is an Occam-style prior: when multiple programs explain the same evidence, prefer the shorter one unless training-derived evidence supports another candidate.
+
+## 5. Learned Program Priors
+The public ARC training challenges are used to estimate empirical priors over symbolic programs. For each training task, exact-fitting programs receive fractional credit. These frequencies are later used only as a small ranking tie-breaker.
+
+The learned prior never overrides a candidate with stronger task-local demonstration fit. Consequently, the learned component proposes a preference over abstractions while the current task remains the final authority.
+
+## 6. Neural-Symbolic Proposal Interface
+The architecture contains an optional `SymbolicProposal` interface for external learned models or LLMs. A proposer may output a sequence such as:
+
+`crop_largest_object -> flip_h`
+
+The sequence is compiled only from an allow-listed operation registry. No generated Python or shell code is executed. The compiled program must then reproduce all demonstrations before it is accepted as an exact candidate.
+
+This creates a controlled path for future neural proposal models while retaining deterministic symbolic verification and notebook reproducibility.
+
+## 7. Two-Attempt Test-Time Reasoning
+ARC-AGI-2 permits two output attempts. We treat these as two distinct hypotheses rather than duplicated outputs. Candidate programs are ranked once per task; test outputs are then deduplicated by predicted grid so `attempt_2` provides alternative coverage whenever observationally equivalent training programs diverge on the unseen input.
+
+The solver records a trace for every prediction containing the selected program names, demonstration scores, exact-fit flags, and candidate count. These traces support failure analysis and make the final paper auditable.
+
+## 8. Experimental Protocol
+Report the following ablations using the same public evaluation split and exact-output metric:
+
+| Version | Added capability | Exact-output accuracy | Fully solved tasks |
+|---|---|---:|---:|
+| v0 | single-step geometric/color baseline | [V0_ACC] | [V0_TASKS] |
+| v1 | + object-centric reasoning | [V1_ACC] | [V1_TASKS] |
+| v2 | + symmetry/counting/relational primitives | [V2_ACC] | [V2_TASKS] |
+| v3 | + two-step compositional search | [V3_ACC] | [V3_TASKS] |
+| v4 | + learned symbolic priors | [V4_ACC] | [V4_TASKS] |
+| v5 | + externally proposed verified DSL programs, if used | [V5_ACC] | [V5_TASKS] |
+
+Final ARC-AGI-2 public leaderboard score: **[LEADERBOARD_SCORE]**  
 Kaggle submission ID: **[SUBMISSION_ID]**  
 Local evaluation exact-output accuracy: **[LOCAL_ACCURACY]**  
 Fully solved evaluation tasks: **[SOLVED_TASKS] / [TOTAL_TASKS]**
 
-Report only values generated by the actual submitted notebook.
+Only report values generated by the actual submitted code.
 
-## 5. Universality and Progress
-The architecture is not tied to one fixed ARC template. Any proposer that emits executable grid programs can be inserted ahead of the same demonstration-consistency verifier. This enables future integration of object-centric DSLs, neural proposal networks, LLM-generated programs, Monte Carlo search, and test-time adaptation while preserving an interpretable verification layer.
+## 9. Why the Approach May Generalize
+The system does not memorize task IDs or hidden outputs. It searches reusable transformations and validates them against each new task's demonstrations. The abstraction layer is modular: richer topology, path reasoning, scene graphs, iterative simulators, or learned proposal distributions can be added without changing the evidence-verification contract.
 
-## 6. Limitations
-The current baseline has a deliberately small primitive library. It will fail tasks requiring multi-object correspondence, counting, topology, path reasoning, iterative simulation, compositional multi-step transformations, or concepts not represented by the DSL. Consistency on only a few demonstrations can also leave multiple programs observationally equivalent.
+This modularity is the main universality claim. The current DSL is ARC-oriented, but the proposal-verification architecture applies more broadly to few-shot structured reasoning problems where candidate programs can be executed and checked.
 
-## 7. Novelty Claim
-The contribution should be described narrowly: a reproducible evidence-filtered synthesis architecture and its measured ARC-AGI-2 behavior. Do not claim that symbolic program synthesis itself is new. Final novelty claims should compare the completed system against public ARC literature and 2026 competition solutions.
+## 10. Limitations
+The solver remains intentionally bounded. It will fail tasks requiring concepts outside the DSL, deep compositions, iterative dynamics, sophisticated topology, long-range object correspondence, or latent semantics not captured by connected components and simple relations. Exact consistency on only a few demonstrations can also leave multiple programs observationally equivalent, and a short-program prior can prefer the wrong extrapolation.
 
-## 8. Conclusion
-ARC-AGI-2 rewards adaptation to unfamiliar tasks. Our baseline treats adaptation as task-local program induction with deterministic evidence checks and explicit hypothesis diversity. The current system establishes a clean, auditable foundation for stronger hybrid reasoning systems.
+The learned prior is lightweight rather than a large neural model. This improves reproducibility and offline Kaggle execution, but it cannot discover a missing abstraction by itself.
+
+## 11. Novelty Position
+Symbolic program synthesis and object-centric ARC solving are established ideas. The contribution should therefore be claimed narrowly: a reproducible evidence-verified hybrid architecture combining object abstractions, bounded compositional search, demonstration-sensitive fallback scoring, learned symbolic priors, genuine two-attempt diversity, prediction traces, and a safe allow-listed neural-symbolic proposal interface.
+
+The final novelty discussion should compare measured behavior and engineering choices with relevant public ARC research and 2026 competition solutions rather than claiming that the underlying paradigm is new.
+
+## 12. Conclusion
+ARC-AGI-2 tests adaptation when the rule changes from task to task. Our system treats that adaptation as executable hypothesis search constrained by evidence. The current implementation expands a simple symbolic baseline into an object-centric, compositional, partially learned, and auditable hybrid solver while preserving deterministic verification. The remaining research problem is empirical: identify recurring failure classes, add reusable abstractions rather than task-specific patches, and measure whether each addition improves unseen-task generalization.
