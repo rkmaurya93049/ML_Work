@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from .meta_ranker import rerank_with_priors
 from .primitives import Grid, crop_non_background, identity
 from .synthesizer import Candidate, synthesize
 
@@ -65,18 +66,21 @@ def _choose_two(predictions: list[Prediction]) -> tuple[Prediction, Prediction]:
     if not predictions:
         raise ValueError("prediction pool must not be empty")
     first = predictions[0]
-
-    # Prefer a genuinely different second hypothesis. Among exact-training programs,
-    # complexity ordering from the synthesizer acts as an Occam prior. If only one
-    # exact program exists, the second slot is used for the best partial-fit behavior.
     second = next((p for p in predictions[1:] if p.grid != first.grid), None)
     if second is None:
         second = first
     return first, second
 
 
-def solve_task_with_trace(task: dict) -> tuple[list[dict[str, Grid]], list[dict[str, object]]]:
+def solve_task_with_trace(
+    task: dict,
+    *,
+    priors: dict[str, float] | None = None,
+) -> tuple[list[dict[str, Grid]], list[dict[str, object]]]:
     programs = synthesize(task["train"])
+    if priors:
+        programs = rerank_with_priors(programs, priors)
+
     outputs: list[dict[str, Grid]] = []
     trace: list[dict[str, object]] = []
 
@@ -99,18 +103,26 @@ def solve_task_with_trace(task: dict) -> tuple[list[dict[str, Grid]], list[dict[
     return outputs, trace
 
 
-def solve_task(task: dict) -> list[dict[str, Grid]]:
-    outputs, _ = solve_task_with_trace(task)
+def solve_task(task: dict, *, priors: dict[str, float] | None = None) -> list[dict[str, Grid]]:
+    outputs, _ = solve_task_with_trace(task, priors=priors)
     return outputs
 
 
-def solve_challenges(challenges: dict[str, dict]) -> dict[str, list[dict[str, Grid]]]:
-    return {task_id: solve_task(task) for task_id, task in challenges.items()}
+def solve_challenges(
+    challenges: dict[str, dict],
+    *,
+    priors: dict[str, float] | None = None,
+) -> dict[str, list[dict[str, Grid]]]:
+    return {task_id: solve_task(task, priors=priors) for task_id, task in challenges.items()}
 
 
-def solve_challenges_with_trace(challenges: dict[str, dict]):
+def solve_challenges_with_trace(
+    challenges: dict[str, dict],
+    *,
+    priors: dict[str, float] | None = None,
+):
     submission: dict[str, list[dict[str, Grid]]] = {}
     traces: dict[str, list[dict[str, object]]] = {}
     for task_id, task in challenges.items():
-        submission[task_id], traces[task_id] = solve_task_with_trace(task)
+        submission[task_id], traces[task_id] = solve_task_with_trace(task, priors=priors)
     return submission, traces
