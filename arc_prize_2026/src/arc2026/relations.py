@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, deque
 
 import numpy as np
 
@@ -50,6 +50,93 @@ def outline_non_background(grid: Grid) -> Grid:
                 neighbors.append(0 <= ny < h and 0 <= nx < w and a[ny, nx] != bg)
             if all(neighbors):
                 out[y, x] = bg
+    return out.tolist()
+
+
+def connect_aligned_same_color(grid: Grid) -> Grid:
+    """Connect same-color non-background markers sharing a row or column."""
+    a = np.asarray(grid, dtype=int).copy()
+    bg = most_common_color(grid)
+    h, w = a.shape
+
+    for y in range(h):
+        by_color: dict[int, list[int]] = {}
+        for x in range(w):
+            c = int(a[y, x])
+            if c != bg:
+                by_color.setdefault(c, []).append(x)
+        for color, xs in by_color.items():
+            if len(xs) >= 2:
+                a[y, min(xs):max(xs) + 1] = color
+
+    for x in range(w):
+        by_color = {}
+        for y in range(h):
+            c = int(a[y, x])
+            if c != bg:
+                by_color.setdefault(c, []).append(y)
+        for color, ys in by_color.items():
+            if len(ys) >= 2:
+                a[min(ys):max(ys) + 1, x] = color
+
+    return a.tolist()
+
+
+def fill_enclosed_holes(grid: Grid) -> Grid:
+    """Fill background regions not connected to the border.
+
+    A hole is filled with the most common non-background color touching its
+    boundary. This is useful for simple enclosure/topology tasks and remains
+    conservative because the synthesizer verifies the result on demonstrations.
+    """
+    a = np.asarray(grid, dtype=int)
+    bg = most_common_color(grid)
+    h, w = a.shape
+    outside: set[tuple[int, int]] = set()
+    q: deque[tuple[int, int]] = deque()
+
+    for y in range(h):
+        for x in (0, w - 1):
+            if int(a[y, x]) == bg and (y, x) not in outside:
+                outside.add((y, x)); q.append((y, x))
+    for x in range(w):
+        for y in (0, h - 1):
+            if int(a[y, x]) == bg and (y, x) not in outside:
+                outside.add((y, x)); q.append((y, x))
+
+    while q:
+        y, x = q.popleft()
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < h and 0 <= nx < w and (ny, nx) not in outside and int(a[ny, nx]) == bg:
+                outside.add((ny, nx)); q.append((ny, nx))
+
+    out = a.copy()
+    holes = {(y, x) for y in range(h) for x in range(w) if int(a[y, x]) == bg and (y, x) not in outside}
+    seen: set[tuple[int, int]] = set()
+    for start in sorted(holes):
+        if start in seen:
+            continue
+        region: list[tuple[int, int]] = []
+        rq = deque([start]); seen.add(start)
+        boundary_colors: list[int] = []
+        while rq:
+            y, x = rq.popleft(); region.append((y, x))
+            for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                ny, nx = y + dy, x + dx
+                if not (0 <= ny < h and 0 <= nx < w):
+                    continue
+                if (ny, nx) in holes:
+                    if (ny, nx) not in seen:
+                        seen.add((ny, nx)); rq.append((ny, nx))
+                else:
+                    c = int(a[ny, nx])
+                    if c != bg:
+                        boundary_colors.append(c)
+        if boundary_colors:
+            fill = Counter(boundary_colors).most_common(1)[0][0]
+            for y, x in region:
+                out[y, x] = fill
     return out.tolist()
 
 
@@ -107,11 +194,7 @@ def render_object_count(grid: Grid, orientation: str, color: int) -> Grid:
 
 
 def sort_objects_by_size_row(grid: Grid) -> Grid:
-    """Render object colors as a 1-row sequence ordered by component size.
-
-    This is intentionally conservative and only useful when demonstrations prove
-    that this abstraction is the target.
-    """
+    """Render object colors as a 1-row sequence ordered by component size."""
     objs = connected_components(grid)
     if not objs:
         return [[most_common_color(grid)]]
