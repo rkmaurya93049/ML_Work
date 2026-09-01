@@ -1,82 +1,72 @@
 """Kaggle-ready ARC-AGI-2 submission entry point.
 
-Attach the ARC Prize 2026 ARC-AGI-2 competition data and run this file in a
-Kaggle Notebook. It writes /kaggle/working/submission.json.
+This entry point intentionally imports the same `arc2026` package used for local
+evaluation so the leaderboard submission and Paper Track description stay in
+sync. Attach the competition data plus this project (or a Kaggle Dataset made
+from it) to the notebook before rerun.
 """
 
+from __future__ import annotations
+
 import json
-from collections import Counter
 from pathlib import Path
-import numpy as np
+import sys
+
+
+def _find_src() -> Path:
+    candidates = [
+        Path.cwd() / "src",
+        Path.cwd() / "arc_prize_2026" / "src",
+        Path("/kaggle/working/arc_prize_2026/src"),
+    ]
+    # Kaggle datasets are mounted one directory below /kaggle/input/<dataset-name>.
+    input_root = Path("/kaggle/input")
+    if input_root.exists():
+        candidates.extend(input_root.glob("*/arc_prize_2026/src"))
+        candidates.extend(input_root.glob("*/src"))
+
+    for candidate in candidates:
+        if (candidate / "arc2026" / "solver.py").exists():
+            return candidate
+    raise FileNotFoundError(
+        "Could not find arc_prize_2026/src. Attach this repository/project as a Kaggle "
+        "Dataset or copy the project into /kaggle/working before running the notebook."
+    )
+
+
+SRC = _find_src()
+sys.path.insert(0, str(SRC))
+
+from arc2026.io import load_json, save_json, validate_submission  # noqa: E402
+from arc2026.meta_ranker import learn_program_priors  # noqa: E402
+from arc2026.solver import solve_challenges_with_trace  # noqa: E402
+
 
 DATA = Path("/kaggle/input/competitions/arc-prize-2026-arc-agi-2")
+TRAIN = DATA / "arc-agi_training_challenges.json"
 TEST = DATA / "arc-agi_test_challenges.json"
 OUT = Path("/kaggle/working/submission.json")
+TRACE = Path("/kaggle/working/solver_trace.json")
 
+if not TEST.exists():
+    # Some Kaggle mounts omit the intermediate `competitions` directory.
+    alternatives = list(Path("/kaggle/input").glob("*/arc-agi_test_challenges.json"))
+    if not alternatives:
+        raise FileNotFoundError("ARC-AGI-2 test challenges were not found under /kaggle/input")
+    DATA = alternatives[0].parent
+    TRAIN = DATA / "arc-agi_training_challenges.json"
+    TEST = DATA / "arc-agi_test_challenges.json"
 
-def arr(g): return np.asarray(g, dtype=int)
-def identity(g): return arr(g).tolist()
-def crop(g):
-    a = arr(g); bg = Counter(a.ravel().tolist()).most_common(1)[0][0]
-    ys, xs = np.where(a != bg)
-    return g if len(ys) == 0 else a[ys.min():ys.max()+1, xs.min():xs.max()+1].tolist()
+challenges = load_json(TEST)
+priors = learn_program_priors(load_json(TRAIN)) if TRAIN.exists() else None
+submission, trace = solve_challenges_with_trace(challenges, priors=priors)
+validate_submission(challenges, submission)
+save_json(submission, OUT)
+save_json(trace, TRACE)
 
-BASE = [
-    ("identity", identity),
-    ("rot90", lambda g: np.rot90(arr(g), 1).tolist()),
-    ("rot180", lambda g: np.rot90(arr(g), 2).tolist()),
-    ("rot270", lambda g: np.rot90(arr(g), 3).tolist()),
-    ("flip_h", lambda g: np.fliplr(arr(g)).tolist()),
-    ("flip_v", lambda g: np.flipud(arr(g)).tolist()),
-    ("transpose", lambda g: arr(g).T.tolist()),
-    ("crop", crop),
-]
-
-
-def recolor_mapping(inp, out):
-    a, b = arr(inp), arr(out)
-    if a.shape != b.shape: return None
-    m = {}
-    for x, y in zip(a.ravel(), b.ravel()):
-        x, y = int(x), int(y)
-        if x in m and m[x] != y: return None
-        m[x] = y
-    return m
-
-
-def candidates(task):
-    train = task["train"]
-    pool = list(BASE)
-    m = recolor_mapping(train[0]["input"], train[0]["output"])
-    if m is not None:
-        pool.append(("recolor", lambda g, m=m: [[m.get(v, v) for v in r] for r in g]))
-    good = []
-    for name, fn in pool:
-        try:
-            if all(fn(p["input"]) == p["output"] for p in train): good.append((name, fn))
-        except Exception:
-            pass
-    return good
-
-
-def solve(task):
-    good = candidates(task)
-    p1 = good[0][1] if good else identity
-    p2 = good[1][1] if len(good) > 1 else crop
-    result = []
-    for t in task["test"]:
-        g = t["input"]
-        try: a1 = p1(g)
-        except Exception: a1 = g
-        try: a2 = p2(g)
-        except Exception: a2 = g
-        result.append({"attempt_1": a1, "attempt_2": a2})
-    return result
-
-
-with TEST.open("r", encoding="utf-8") as f:
-    challenges = json.load(f)
-submission = {task_id: solve(task) for task_id, task in challenges.items()}
-with OUT.open("w", encoding="utf-8") as f:
-    json.dump(submission, f, separators=(",", ":"))
-print(f"Created {OUT} for {len(submission)} tasks")
+print(json.dumps({
+    "tasks": len(submission),
+    "submission": str(OUT),
+    "trace": str(TRACE),
+    "learned_priors": bool(priors),
+}, indent=2))
