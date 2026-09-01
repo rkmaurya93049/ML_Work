@@ -1,34 +1,116 @@
 from __future__ import annotations
 
-from .primitives import Grid, identity, crop_non_background
-from .synthesizer import synthesize
+from dataclasses import dataclass
+from typing import Callable
+
+from .primitives import Grid, crop_non_background, identity
+from .synthesizer import Candidate, synthesize
 
 
-def _safe(fn, grid: Grid) -> Grid:
+@dataclass(frozen=True)
+class Prediction:
+    grid: Grid
+    program: str
+    train_score: float
+    exact_train: bool
+
+
+def _is_valid(grid: Grid) -> bool:
+    if not grid or not grid[0] or len(grid) > 30 or len(grid[0]) > 30:
+        return False
+    width = len(grid[0])
+    return all(len(row) == width for row in grid) and all(
+        isinstance(v, int) and 0 <= v <= 9 for row in grid for v in row
+    )
+
+
+def _safe(fn: Callable[[Grid], Grid], grid: Grid) -> Grid:
     try:
         out = fn(grid)
-        if not out or not out[0] or len(out) > 30 or len(out[0]) > 30:
-            return identity(grid)
-        return out
+        return out if _is_valid(out) else identity(grid)
     except Exception:
         return identity(grid)
 
 
-def solve_task(task: dict) -> list[dict[str, Grid]]:
-    programs = synthesize(task["train"])
-    p1 = programs[0].fn if programs else identity
-    p2 = programs[1].fn if len(programs) > 1 else crop_non_background
+def _fallbacks(grid: Grid) -> list[Prediction]:
+    raw = [
+        Prediction(identity(grid), "fallback:identity", 0.0, False),
+        Prediction(crop_non_background(grid), "fallback:crop", 0.0, False),
+    ]
+    seen: set[str] = set()
+    out: list[Prediction] = []
+    for p in raw:
+        key = repr(p.grid)
+        if key not in seen and _is_valid(p.grid):
+            seen.add(key)
+            out.append(p)
+    return out
 
-    outputs = []
+
+def _predict_candidates(programs: list[Candidate], grid: Grid) -> list[Prediction]:
+    predictions: list[Prediction] = []
+    seen: set[str] = set()
+    for c in programs:
+        pred = _safe(c.fn, grid)
+        key = repr(pred)
+        if key in seen:
+            continue
+        seen.add(key)
+        predictions.append(Prediction(pred, c.name, c.train_score, c.exact_train))
+    predictions.extend(p for p in _fallbacks(grid) if repr(p.grid) not in seen)
+    return predictions
+
+
+def _choose_two(predictions: list[Prediction]) -> tuple[Prediction, Prediction]:
+    if not predictions:
+        raise ValueError("prediction pool must not be empty")
+    first = predictions[0]
+
+    # Prefer a genuinely different second hypothesis. Among exact-training programs,
+    # complexity ordering from the synthesizer acts as an Occam prior. If only one
+    # exact program exists, the second slot is used for the best partial-fit behavior.
+    second = next((p for p in predictions[1:] if p.grid != first.grid), None)
+    if second is None:
+        second = first
+    return first, second
+
+
+def solve_task_with_trace(task: dict) -> tuple[list[dict[str, Grid]], list[dict[str, object]]]:
+    programs = synthesize(task["train"])
+    outputs: list[dict[str, Grid]] = []
+    trace: list[dict[str, object]] = []
+
     for test_pair in task["test"]:
         grid = test_pair["input"]
-        a1 = _safe(p1, grid)
-        a2 = _safe(p2, grid)
-        if a2 == a1:
-            a2 = identity(grid) if a1 != identity(grid) else crop_non_background(grid)
-        outputs.append({"attempt_1": a1, "attempt_2": a2})
+        ranked = _predict_candidates(programs, grid)
+        p1, p2 = _choose_two(ranked)
+        outputs.append({"attempt_1": p1.grid, "attempt_2": p2.grid})
+        trace.append(
+            {
+                "attempt_1_program": p1.program,
+                "attempt_1_train_score": round(p1.train_score, 6),
+                "attempt_1_exact_train": p1.exact_train,
+                "attempt_2_program": p2.program,
+                "attempt_2_train_score": round(p2.train_score, 6),
+                "attempt_2_exact_train": p2.exact_train,
+                "candidate_count": len(ranked),
+            }
+        )
+    return outputs, trace
+
+
+def solve_task(task: dict) -> list[dict[str, Grid]]:
+    outputs, _ = solve_task_with_trace(task)
     return outputs
 
 
 def solve_challenges(challenges: dict[str, dict]) -> dict[str, list[dict[str, Grid]]]:
     return {task_id: solve_task(task) for task_id, task in challenges.items()}
+
+
+def solve_challenges_with_trace(challenges: dict[str, dict]):
+    submission: dict[str, list[dict[str, Grid]]] = {}
+    traces: dict[str, list[dict[str, object]]] = {}
+    for task_id, task in challenges.items():
+        submission[task_id], traces[task_id] = solve_task_with_trace(task)
+    return submission, traces
