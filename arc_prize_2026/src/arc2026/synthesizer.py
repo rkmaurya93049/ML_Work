@@ -23,6 +23,8 @@ from .relations import (
     complete_horizontal_symmetry,
     complete_rotational_symmetry,
     complete_vertical_symmetry,
+    connect_aligned_same_color,
+    fill_enclosed_holes,
     infer_count_rendering,
     infer_uniform_foreground_color,
     outline_non_background,
@@ -56,7 +58,6 @@ def _pair_score(pred: Grid, truth: Grid) -> float:
     if not _valid_grid(pred):
         return 0.0
     if len(pred) != len(truth) or len(pred[0]) != len(truth[0]):
-        # Small reward for matching one dimension: useful for ranking shape hypotheses.
         return 0.08 * int(len(pred) == len(truth)) + 0.08 * int(len(pred[0]) == len(truth[0]))
     total = len(truth) * len(truth[0])
     equal = sum(int(a == b) for rp, rt in zip(pred, truth) for a, b in zip(rp, rt))
@@ -93,6 +94,8 @@ def _static_candidates() -> list[Candidate]:
             Candidate("complete_horizontal_symmetry", complete_horizontal_symmetry, 2),
             Candidate("complete_vertical_symmetry", complete_vertical_symmetry, 2),
             Candidate("complete_rotational_symmetry", complete_rotational_symmetry, 2),
+            Candidate("connect_aligned_same_color", connect_aligned_same_color, 2),
+            Candidate("fill_enclosed_holes", fill_enclosed_holes, 3),
             Candidate("outline_non_background", outline_non_background, 2),
             Candidate("sort_objects_by_size_row", sort_objects_by_size_row, 3),
         ]
@@ -163,13 +166,11 @@ def _compose(a: Candidate, b: Candidate) -> Candidate:
     )
 
 
-def generate_candidates(train: list[dict], *, max_composed: int = 220) -> list[Candidate]:
+def generate_candidates(train: list[dict], *, max_composed: int = 260) -> list[Candidate]:
     """Generate primitive, data-derived, and bounded two-step DSL programs."""
     base = _static_candidates() + _derived_candidates(train)
     pool = list(base)
 
-    # Keep composition search bounded. Simple geometric/object transforms compose
-    # well and are much cheaper than unconstrained program enumeration.
     composed: list[Candidate] = []
     for a in base:
         for b in base:
@@ -184,7 +185,6 @@ def generate_candidates(train: list[dict], *, max_composed: int = 220) -> list[C
             break
     pool.extend(composed)
 
-    # Deduplicate programs by their behavior on demonstrations, preferring lower complexity.
     best_by_behavior: dict[str, Candidate] = {}
     for c in pool:
         fp = _fingerprint_on_train(c.fn, train)
