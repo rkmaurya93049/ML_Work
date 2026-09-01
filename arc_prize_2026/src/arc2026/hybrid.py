@@ -15,6 +15,8 @@ from .relations import (
     complete_horizontal_symmetry,
     complete_rotational_symmetry,
     complete_vertical_symmetry,
+    connect_aligned_same_color,
+    fill_enclosed_holes,
     outline_non_background,
     sort_objects_by_size_row,
 )
@@ -46,6 +48,8 @@ def operation_registry():
             "complete_horizontal_symmetry": complete_horizontal_symmetry,
             "complete_vertical_symmetry": complete_vertical_symmetry,
             "complete_rotational_symmetry": complete_rotational_symmetry,
+            "connect_aligned_same_color": connect_aligned_same_color,
+            "fill_enclosed_holes": fill_enclosed_holes,
             "outline_non_background": outline_non_background,
             "sort_objects_by_size_row": sort_objects_by_size_row,
         }
